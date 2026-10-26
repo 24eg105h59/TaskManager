@@ -1,0 +1,11 @@
+{
+  "name": "taskmanager",
+  "version": "1.0.0",
+  "private": true,
+  "description": "TaskNest - Mini Task Manager",
+  "scripts": {
+    "postinstall": "npm --prefix tasknest/backend install",
+    "build": "npm --prefix tasknest/backend install",
+    "start": "npm --prefix tasknest/backend start"
+  }
+}
