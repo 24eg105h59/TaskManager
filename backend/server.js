@@ -16,10 +16,15 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// Health check endpoint for Render / cloud load balancers
+app.get('/healthz', (req, res) => {
+  res.status(200).send('OK');
+});
+
 // Task REST API Routes
 app.use('/api/tasks', taskRoutes);
 
-// Base API route
+// Base API info route
 app.get('/api', (req, res) => {
   res.status(200).json({
     message: 'Welcome to TaskNest SQL API!',
@@ -72,9 +77,18 @@ app.use((err, req, res, next) => {
   });
 });
 
-// Server Port
-const PORT = process.env.PORT || 5000;
+// Process-level error diagnostics
+process.on('uncaughtException', (err) => {
+  console.error('[FATAL UNCAUGHT EXCEPTION]:', err);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('[UNHANDLED REJECTION]:', reason);
+});
 
-app.listen(PORT, () => {
-  console.log(`TaskNest backend server is running on http://localhost:${PORT}`);
+// Server Port & Host: bind to 0.0.0.0 for Render / cloud deployment
+const PORT = process.env.PORT || 5000;
+const HOST = '0.0.0.0';
+
+app.listen(PORT, HOST, () => {
+  console.log(`TaskNest backend server is running on http://${HOST}:${PORT}`);
 });

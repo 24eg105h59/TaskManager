@@ -1,13 +1,12 @@
-const db = require('../config/db');
+const { db, dbType } = require('../config/db');
 
 /**
  * Format raw SQLite row into a clean Task object
- * Maps 0/1 integer to boolean and provides both `id` and `_id` for frontend compatibility
  */
 const formatTask = (row) => {
   if (!row) return null;
   return {
-    id: row.id,
+    id: Number(row.id),
     _id: row.id.toString(),
     title: row.title,
     description: row.description || '',
@@ -22,90 +21,105 @@ const formatTask = (row) => {
 const Task = {
   /**
    * Retrieve all tasks sorted by createdAt descending
-   * @returns {Promise<Array>}
    */
-  findAll: () => {
-    return new Promise((resolve, reject) => {
-      const sql = 'SELECT * FROM tasks ORDER BY datetime(createdAt) DESC, id DESC';
-      db.all(sql, [], (err, rows) => {
-        if (err) return reject(err);
-        resolve(rows.map(formatTask));
+  findAll: async () => {
+    if (dbType === 'node:sqlite') {
+      const rows = db.prepare('SELECT * FROM tasks ORDER BY datetime(createdAt) DESC, id DESC').all();
+      return rows.map(formatTask);
+    } else {
+      return new Promise((resolve, reject) => {
+        db.all('SELECT * FROM tasks ORDER BY datetime(createdAt) DESC, id DESC', [], (err, rows) => {
+          if (err) return reject(err);
+          resolve((rows || []).map(formatTask));
+        });
       });
-    });
+    }
   },
 
   /**
    * Find a single task by ID
-   * @param {number|string} id
-   * @returns {Promise<Object|null>}
    */
-  findById: (id) => {
-    return new Promise((resolve, reject) => {
-      const sql = 'SELECT * FROM tasks WHERE id = ?';
-      db.get(sql, [id], (err, row) => {
-        if (err) return reject(err);
-        resolve(formatTask(row));
+  findById: async (id) => {
+    const numId = Number(id);
+    if (dbType === 'node:sqlite') {
+      const row = db.prepare('SELECT * FROM tasks WHERE id = ?').get(numId);
+      return formatTask(row);
+    } else {
+      return new Promise((resolve, reject) => {
+        db.get('SELECT * FROM tasks WHERE id = ?', [numId], (err, row) => {
+          if (err) return reject(err);
+          resolve(formatTask(row));
+        });
       });
-    });
+    }
   },
 
   /**
    * Create a new task using SQL INSERT
-   * @param {Object} data { title, description }
-   * @returns {Promise<Object>}
    */
-  create: ({ title, description }) => {
-    return new Promise((resolve, reject) => {
-      const sql = 'INSERT INTO tasks (title, description, completed, createdAt) VALUES (?, ?, 0, ?)';
-      const now = new Date().toISOString();
-      const desc = description ? description.trim() : '';
+  create: async ({ title, description }) => {
+    const now = new Date().toISOString();
+    const desc = description ? description.trim() : '';
+    const cleanTitle = title.trim();
 
-      db.run(sql, [title.trim(), desc, now], function (err) {
-        if (err) return reject(err);
-        // this.lastID contains the auto-incremented primary key
-        Task.findById(this.lastID).then(resolve).catch(reject);
+    if (dbType === 'node:sqlite') {
+      const stmt = db.prepare('INSERT INTO tasks (title, description, completed, createdAt) VALUES (?, ?, 0, ?)');
+      const res = stmt.run(cleanTitle, desc, now);
+      const newId = Number(res.lastInsertRowid);
+      return await Task.findById(newId);
+    } else {
+      return new Promise((resolve, reject) => {
+        const sql = 'INSERT INTO tasks (title, description, completed, createdAt) VALUES (?, ?, 0, ?)';
+        db.run(sql, [cleanTitle, desc, now], function (err) {
+          if (err) return reject(err);
+          Task.findById(this.lastID).then(resolve).catch(reject);
+        });
       });
-    });
+    }
   },
 
   /**
    * Update task completed status using SQL UPDATE
-   * @param {number|string} id
-   * @param {boolean} completed
-   * @returns {Promise<Object|null>}
    */
-  updateCompleted: (id, completed) => {
-    return new Promise((resolve, reject) => {
-      const sql = 'UPDATE tasks SET completed = ? WHERE id = ?';
-      const completedInt = completed ? 1 : 0;
+  updateCompleted: async (id, completed) => {
+    const numId = Number(id);
+    const completedInt = completed ? 1 : 0;
 
-      db.run(sql, [completedInt, id], function (err) {
-        if (err) return reject(err);
-        if (this.changes === 0) return resolve(null);
-        Task.findById(id).then(resolve).catch(reject);
+    if (dbType === 'node:sqlite') {
+      const stmt = db.prepare('UPDATE tasks SET completed = ? WHERE id = ?');
+      const res = stmt.run(completedInt, numId);
+      if (res.changes === 0) return null;
+      return await Task.findById(numId);
+    } else {
+      return new Promise((resolve, reject) => {
+        db.run('UPDATE tasks SET completed = ? WHERE id = ?', [completedInt, numId], function (err) {
+          if (err) return reject(err);
+          if (this.changes === 0) return resolve(null);
+          Task.findById(numId).then(resolve).catch(reject);
+        });
       });
-    });
+    }
   },
 
   /**
    * Delete task by ID using SQL DELETE
-   * @param {number|string} id
-   * @returns {Promise<Object|null>}
    */
-  deleteById: (id) => {
-    return new Promise((resolve, reject) => {
-      Task.findById(id)
-        .then((task) => {
-          if (!task) return resolve(null);
+  deleteById: async (id) => {
+    const numId = Number(id);
+    const existingTask = await Task.findById(numId);
+    if (!existingTask) return null;
 
-          const sql = 'DELETE FROM tasks WHERE id = ?';
-          db.run(sql, [id], function (err) {
-            if (err) return reject(err);
-            resolve(task);
-          });
-        })
-        .catch(reject);
-    });
+    if (dbType === 'node:sqlite') {
+      db.prepare('DELETE FROM tasks WHERE id = ?').run(numId);
+      return existingTask;
+    } else {
+      return new Promise((resolve, reject) => {
+        db.run('DELETE FROM tasks WHERE id = ?', [numId], function (err) {
+          if (err) return reject(err);
+          resolve(existingTask);
+        });
+      });
+    }
   },
 };
 

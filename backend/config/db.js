@@ -1,27 +1,65 @@
-const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
 
-// Path to SQLite database file (configurable via DB_PATH env variable)
-const dbPath = process.env.DB_PATH
-  ? path.resolve(process.env.DB_PATH)
-  : path.join(__dirname, '../tasknest.sqlite');
-
 /**
- * Initialize SQLite SQL database connection
+ * Determine suitable SQLite DB path
+ * On Render/Linux cloud environments, /tmp is always writable.
  */
-const db = new sqlite3.Database(dbPath, (err) => {
-  if (err) {
-    console.error(`[TaskNest SQL DB] Connection Error: ${err.message}`);
-    process.exit(1);
+let dbPath = process.env.DB_PATH;
+if (!dbPath) {
+  if (process.env.RENDER) {
+    dbPath = '/tmp/tasknest.sqlite';
+  } else {
+    dbPath = path.join(__dirname, '../tasknest.sqlite');
   }
-  console.log(`[TaskNest SQL DB] Connected to SQLite database: ${dbPath}`);
-});
+}
+
+let db = null;
+let dbType = 'none';
+
+// 1. Try built-in Node.js SQLite (available on Node >= 22.5.0 and Node 24)
+try {
+  const { DatabaseSync } = require('node:sqlite');
+  db = new DatabaseSync(dbPath);
+  dbType = 'node:sqlite';
+  console.log(`[TaskNest SQL DB] Connected using built-in node:sqlite at: ${dbPath}`);
+} catch (err) {
+  console.warn(`[TaskNest SQL DB] node:sqlite notice: ${err.message}`);
+}
+
+// 2. If node:sqlite failed, try sqlite3 package
+if (!db) {
+  try {
+    const sqlite3 = require('sqlite3').verbose();
+    db = new sqlite3.Database(dbPath, (err) => {
+      if (err) {
+        console.error(`[TaskNest SQL DB] sqlite3 connection error: ${err.message}`);
+      } else {
+        console.log(`[TaskNest SQL DB] Connected using sqlite3 package at: ${dbPath}`);
+      }
+    });
+    dbType = 'sqlite3';
+  } catch (err) {
+    console.warn(`[TaskNest SQL DB] sqlite3 package notice: ${err.message}`);
+  }
+}
+
+// 3. Fallback to in-memory database if file path cannot be written
+if (!db) {
+  try {
+    const { DatabaseSync } = require('node:sqlite');
+    db = new DatabaseSync(':memory:');
+    dbType = 'node:sqlite';
+    console.log('[TaskNest SQL DB] Using in-memory SQLite database fallback.');
+  } catch (err) {
+    console.error(`[TaskNest SQL DB] In-memory initialization error: ${err.message}`);
+  }
+}
 
 /**
- * Create 'tasks' table with SQL if it does not exist
+ * Initialize schema table
  */
-const initDB = () => {
-  const createTableQuery = `
+const initSchema = () => {
+  const createTableSql = `
     CREATE TABLE IF NOT EXISTS tasks (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       title TEXT NOT NULL,
@@ -31,15 +69,23 @@ const initDB = () => {
     )
   `;
 
-  db.run(createTableQuery, (err) => {
-    if (err) {
-      console.error(`[TaskNest SQL DB] Table creation error: ${err.message}`);
-    } else {
-      console.log('[TaskNest SQL DB] SQL table "tasks" verified and ready.');
-    }
-  });
+  if (dbType === 'node:sqlite') {
+    db.exec(createTableSql);
+    console.log('[TaskNest SQL DB] SQL table "tasks" verified and ready.');
+  } else if (dbType === 'sqlite3') {
+    db.run(createTableSql, (err) => {
+      if (err) {
+        console.error(`[TaskNest SQL DB] Table creation error: ${err.message}`);
+      } else {
+        console.log('[TaskNest SQL DB] SQL table "tasks" verified and ready.');
+      }
+    });
+  }
 };
 
-initDB();
+initSchema();
 
-module.exports = db;
+module.exports = {
+  db,
+  dbType,
+};
